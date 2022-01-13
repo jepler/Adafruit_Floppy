@@ -23,6 +23,9 @@
 #define clr_debug_led() ((void)0)
 #endif
 
+#define MFM_IO_MMIO (1)
+#include "mfm_impl.h"
+
 /**************************************************************************/
 /*!
     @brief  Create a hardware interface to a floppy drive
@@ -270,6 +273,36 @@ void Adafruit_Floppy::step(bool dir, uint8_t times) {
 */
 /**************************************************************************/
 int8_t Adafruit_Floppy::track(void) { return _track; }
+
+/**************************************************************************/
+/*!
+    @brief  Capture and decode one track of MFM data
+    @param  sectors A pointer to an array of memory we can use to store into, 512*n_sectors bytes
+    @param  n_sectors The number of sectors (e.g., 18 for a standard 3.5", 1.44MB format)
+    @param  sector_validity An array of values set to 1 if the sector was captured, 0 if not captured (no IDAM, CRC error, etc)
+    @return Number of sectors we actually captured
+*/
+/**************************************************************************/
+uint32_t Adafruit_Floppy::read_track_mfm(uint8_t *sectors, size_t n_sectors, uint8_t *sector_validity) {
+    mfm_io_t io;
+#ifdef BUSIO_USE_FAST_PINIO
+    io.index_port = indexPort;
+    io.index_mask = indexMask;
+    io.data_port = dataPort;
+    io.data_mask = dataMask;
+#elif defined(ARDUINO_ARCH_RP2040)
+    io.index_port = &sio_hw->gpio_in;
+    io.index_mask = 1u << _indexpin;
+    io.data_port = &sio_hw->gpio_in;
+    io.data_mask = 1u << _rddatapin;
+#endif
+
+    noInterrupts();
+    int result = read_track(io, n_sectors, buf, sector_validity);
+    Interrupts();
+
+    return result;
+}
 
 /**************************************************************************/
 /*!

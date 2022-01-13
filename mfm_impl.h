@@ -7,7 +7,65 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#pragma GCC push_options
+#pragma GCC optimize("-O3")
 typedef struct mfm_io mfm_io_t;
+
+#ifndef MFM_IO_MMIO
+#define MFM_IO_MMIO (0)
+#endif
+
+// If you have a memory mapped peripheral, define MFM_IO_MMIO to get an implementation of the mfm_io functions.
+// then, just populate the fields with the actual registers to use
+#if MFM_IO_MMIO
+struct mfm_io {
+    volatile uint32_t *index_port;
+    uint32_t index_mask;
+    volatile uint32_t *data_port;
+    uint32_t data_mask;
+    unsigned index_state;
+    unsigned index_count;
+};
+
+#define READ_DATA() (!!(*io->data_port & io->data_mask))
+#define READ_INDEX() (!!(*io->index_port & io->index_mask))
+__attribute__((always_inline))
+static inline mfm_io_symbol_t mfm_io_read_symbol(mfm_io_t *io) {
+    unsigned pulse_count = 3;
+    while (!READ_DATA()) {
+        pulse_count++;
+    }
+
+    unsigned index_state = (io->index_state << 1) | READ_INDEX();
+    if ((index_state & 3) == 2) { // a zero-to-one transition
+        io->index_count++;
+    }
+    io->index_state = index_state;
+
+    while (READ_DATA()) {
+        pulse_count++;
+    }
+
+    mfm_io_symbol_t result = pulse_10;
+    if (pulse_count > T2_5) {
+        result++;
+    }
+    if (pulse_count > T3_5) {
+        result++;
+    }
+
+    return result;
+}
+
+static void mfm_io_reset_sync_count(mfm_io_t *io) {
+    io->index_count = 0;
+}
+
+__attribute__((optimize("O3"), always_inline))
+inline static int mfm_io_get_sync_count(mfm_io_t *io) {
+    return io->index_count;
+}
+#endif
 
 typedef enum { pulse_10, pulse_100, pulse_1000 } mfm_io_symbol_t;
 
@@ -189,3 +247,4 @@ static int read_track(mfm_io_t io, int n_sectors, void *data, uint8_t *validity)
     }
     return n_valid;
 }
+#pragma GCC pop_options
