@@ -34,7 +34,9 @@ typedef enum { pulse_10, pulse_100, pulse_1000 } mfm_io_symbol_t;
 
 typedef enum { odd = 0, even = 1 } mfm_state_t;
 
-enum { IDAM = 0xfe, DAM = 0xfb };
+enum { SYNC_C2 = 0x5224, SYNC_A1 = 0x4489 };
+
+enum { IAM = 0xfc, IDAM = 0xfe, DAM = 0xfb };
 
 enum { blocksize = 512, overhead = 3, metadata_size = 7 };
 __attribute__((always_inline)) static inline mfm_io_symbol_t
@@ -88,6 +90,10 @@ static uint16_t crc16(uint8_t *data, int len, uint16_t crc) {
   return crc;
 }
 
+static uint16_t crc16_byte(uint8_t data, uint16_t crc) {
+  crc16(&data, 1, crc);
+}
+
 enum { triple_mark_magic = 0x09926499, triple_mark_mask = 0x0fffffff };
 
 __attribute__((always_inline)) inline static bool
@@ -99,10 +105,13 @@ wait_triple_sync_mark(mfm_io_t *io) {
   return state == triple_mark_magic;
 }
 
+// THe preload value of the MFM CRC< assuming the data was preceded by thee 0xa1 sync bytes
+enum { crc_preload = 0xcdb4 };
+
 // Compute the MFM CRC of the data, _assuming it was preceded by three 0xa1 sync
 // bytes
 static int crc16_preloaded(unsigned char *buf, size_t n) {
-  return crc16((uint8_t *)buf, n, 0xcdb4);
+  return crc16((uint8_t *)buf, n, crc_preload);
 }
 
 // Copy 'n' bytes of data into 'buf'
@@ -223,6 +232,59 @@ static int read_track(mfm_io_t io, int n_sectors, void *data,
   }
   return n_valid;
 }
+
+static void write_gap(mfm_io_t, int gap_size) {
+  for(;gap_size--;) {
+    mfm_io_write_byte(0xff);
+  }
+
+}
+
+static void write_gap_4a(mfm_io_t *io) {
+  write_gap(io, 40);
+}
+
+static void write_gap_
+static void write_data_crc(mfm_io_t *io, uint8_t mark, uint8_t data, size_t n_data) {
+  mfm_io_write_byte(io, mark);
+  uint16_t crc = crc16_byte(mark, crc_preload);
+  for(; n_data; n_data--,data++) {
+    mfm_io_write_byte(io, *data);
+    crc = crc16_byte(*data, crc_preload);
+  }
+  mfm_io_write_byte(io, crc >> 8);
+  mfm_io_write_byte(io, crc & 0xff);
+}
+
+static void write_track(mfm_io_t io, int n_sectors, int cyl, int head, void *data_in) {
+  uint8_t *data = data_in;
+
+  mfm_io_wait_sync(&io);
+  mfm_io_write_enable(&io);
+
+  write_gap_4a(&io);
+  write_sync(&io, SYNC_C2);
+  write_iam(&io);
+  write_gap1(&io);
+
+  uint8_t index_data[5] = {cyl, head, 0, 2};
+
+  for(int i = 0; i<n_sectors; i++) {
+    index_data[2] = i;
+    write_sync(&io, SYNC_A1);
+    write_data_crc(&io, IDAM, index_data, sizeof(index_data));
+    write_gap2(&io);
+    write_sync(&io, SYNC_A1);
+    write_data_crc(&io, DAM, data, 512);
+    write_gap3(&io);
+    data += 512;
+  }
+
+  while(mfm_io_sync_count(&io) == 0) {
+    mfm_io_write_byte(&io, 0xff);
+  }
+  mfm_io_write_disable(&io);
+j
 
 #if MFM_IO_MMIO
 #define READ_DATA() (!!(*io->data_port & io->data_mask))
